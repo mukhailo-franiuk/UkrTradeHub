@@ -1,0 +1,320 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+// ==========================================
+// 1. КОРИСТУВАЧІ, РОЛІ ТА БЕЗПЕКА
+// ==========================================
+
+enum Role {
+  BUYER     // Покупець (може купувати, додавати в обране, кошик, писати відгуки)
+  VENDOR    // Продавець (має свій магазин, додає товари, обробляє свої замовлення)
+  ADMIN     // Адміністратор (керує категоріями, модерацією товарів, купонами)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  passwordHash  String?   
+  role          Role      @default(BUYER)
+  avatarBlob    Bytes?    // Аватар користувача у форматі Blob
+  phone         String?
+  
+  // Дані OAuth провайдерів (Google, Telegram)
+  provider      String    @default("credentials") 
+  providerId    String?   @unique                 
+
+  // Фінансова система (Розділена логіка)
+  balanceUah    Decimal   @default(0.00) @db.Decimal(10, 2) // Баланс покупця для кешбеку АБО баланс продавця для виплат
+  cashbackRate  Decimal   @default(0.01) @db.Decimal(3, 2)  // Індивідуальний відсоток кешбеку для покупця
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Зв'язки (Покупець)
+  orders        Order[]
+  reviews       Review[]
+  wishlist      WishlistItem[]
+  cartItems     CartItem[]
+  
+  // Зв'язки (Продавець)
+  shop          Shop?     // Продавець може відкрити один магазин на маркетплейсі
+
+  // Спільна фінансова історія (Логи транзакцій, поповнень, виплат)
+  transactions  Transaction[]
+
+  @@index([email])
+  @@index([role])
+}
+
+// ==========================================
+// 2. СТРУКТУРА МАГАЗИНУ (ПРОДАВЕЦЬ)
+// ==========================================
+
+enum ShopStatus {
+  PENDING    // Очікує перевірки адміністратором
+  APPROVED   // Активний магазин, може торгувати
+  SUSPENDED  // Заблокований за порушення правил маркетплейсу
+}
+
+model Shop {
+  id          String     @id @default(cuid())
+  vendorId    String     @unique
+  name        String     @unique // Назва магазину (наприклад, "Гаджети від Олега")
+  slug        String     @unique
+  description String?    @db.Text
+  logoBlob    Bytes?     // Логотип магазину у форматі Blob
+  status      ShopStatus @default(PENDING)
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Зв'язки
+  vendor      User       @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  products    Product[]
+  orderItems  OrderItem[] // Товари з цього магазину, які купили
+
+  @@index([status])
+}
+
+// ==========================================
+// 3. КАТАЛОГ, КАТЕГОРІЇ ТА BLOB-ГАЛЕРЕЯ
+// ==========================================
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String     // Наприклад, "Телефони та аксесуари"
+  slug        String     @unique 
+  imageUrl    String?
+  parentId    String?    // Для створення деревоподібної структури (підкатегорії)
+  
+  parent      Category?  @relation("CategoryToParent", fields: [parentId], references: [id], onDelete: Cascade)
+  subChapters Category[] @relation("CategoryToParent")
+  products    Product[]
+
+  @@index([parentId])
+}
+
+enum ProductStatus {
+  MODERATION // Товар додано продавцем, очікує перевірки адміном
+  APPROVED   // Товар допущено до продажу, відображається в каталозі
+  REJECTED   // Адмін відхилив товар (потребує правок)
+  ARCHIVED   // Приховано продавцем
+}
+
+model Product {
+  id          String        @id @default(cuid())
+  shopId      String        // Якому магазину належить товар (Хто продавець)
+  categoryId  String        // Категорія товару
+  title       String     
+  slug        String        @unique
+  description String        @db.Text
+  brand       String
+  
+  // Статуси модерації та відображення
+  status      ProductStatus @default(MODERATION)
+  isHotDeal   Boolean       @default(false) // Для блоку SuperDeals (Керує адмін/менеджер)
+  isFeatured  Boolean       @default(false) // Рекомендовані товари
+  
+  // Скандинавські рейтинги
+  rating      Float         @default(0.0)
+  reviewCount Int           @default(0)
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Зв'язки
+  shop        Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  category    Category      @relation(fields: [categoryId], references: [id])
+  images      ProductImage[] // Галерея фотографій у Blob
+  variants    ProductVariant[]
+  reviews     Review[]
+  wishlistedBy WishlistItem[]
+
+  @@index([shopId])
+  @@index([categoryId])
+  @@index([brand])
+  @@index([status])
+}
+
+// Модель для зберігання декількох фотографій товару у Blob
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  imageUrl  String   // Пряме посилання на зображення у Vercel Blob CDN
+  isMain    Boolean  @default(false) // Чи є це фото головним на картці товару
+
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+
+// Варіації товарів (Колір, Розмір, Комплектація тощо)
+model ProductVariant {
+  id          String     @id @default(cuid())
+  productId   String
+  sku         String     @unique // Артикул
+  price       Decimal    @db.Decimal(10, 2)
+  oldPrice    Decimal?   @db.Decimal(10, 2) // Для знижок на кшталт "-52%"
+  stock       Int        @default(0)        // Кількість на складі
+  attributes  Json       // Характеристики: {"color": "Titanium Gray", "storage": "256GB"}
+
+  product     Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  cartItems   CartItem[]
+  orderItems  OrderItem[]
+
+  @@index([productId])
+}
+
+// ==========================================
+// 4. КОШИК ТА ОБРАНЕ (ПОКУПЕЦЬ)
+// ==========================================
+
+model CartItem {
+  id               String         @id @default(cuid())
+  userId           String
+  productVariantId String
+  quantity         Int            @default(1)
+
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  variant          ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productVariantId])
+  @@index([userId])
+}
+
+model WishlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+// ==========================================
+// 5. ЗАМОВЛЕННЯ ТА ПРОМОКОДИ
+// ==========================================
+
+enum OrderStatus {
+  PENDING       // Очікує оплати / підтвердження покупцем
+  PAID          // Оплачено покупцем, кошти "заморожені" маркетплейсом
+  PROCESSING    // Продавець збирає та пакує замовлення
+  SHIPPED       // Продавець відправив товар, додано ТТН
+  DELIVERED     // Покупець забрав товар, кошти перераховані на баланс Продавця
+  CANCELLED     // Замовлення скасовано, кошти повернуто покупцю
+}
+
+enum PaymentMethod {
+  CARD
+  CASH_ON_DELIVERY
+  BONUS_BALANCE
+}
+
+model Order {
+  id             String        @id @default(cuid())
+  userId         String        // Хто купив (Покупець)
+  status         OrderStatus   @default(PENDING)
+  paymentMethod  PaymentMethod
+  isPaid         Boolean       @default(false)
+  
+  totalAmount    Decimal       @db.Decimal(10, 2) 
+  discountAmount Decimal       @default(0.00) @db.Decimal(10, 2)
+  cashbackEarned Decimal       @default(0.00) @db.Decimal(10, 2) 
+
+  shippingAddress String       // Дані доставки (ПІБ, Нова Пошта місто/відділення)
+  trackingNumber  String?      // ТТН (вводить Продавець при відправці)
+
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user           User          @relation(fields: [userId], references: [id])
+  items          OrderItem[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model OrderItem {
+  id               String         @id @default(cuid())
+  orderId          String
+  shopId           String         // Фіксуємо магазин, щоб Продавець бачив тільки свої товари у замовленні
+  productVariantId String
+  quantity         Int
+  price            Decimal        @db.Decimal(10, 2) // Ціна на момент покупки
+
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  shop             Shop           @relation(fields: [shopId], references: [id])
+  variant          ProductVariant @relation(fields: [productVariantId], references: [id])
+
+  @@index([orderId])
+  @@index([shopId])
+}
+
+model Coupon {
+  id          String    @id @default(cuid())
+  code        String    @unique // Керується Адміном ("VELA150")
+  discountUah Decimal   @db.Decimal(10, 2) 
+  minOrderSum Decimal   @default(0.00) @db.Decimal(10, 2) 
+  isActive    Boolean   @default(true)
+  expiresAt   DateTime? 
+}
+
+// ==========================================
+// 6. ВІДГУКИ ТА ФІНАНСОВІ ТРАНЗАКЦІЇ
+// ==========================================
+
+model Review {
+  id        String   @id @default(cuid())
+  userId    String   // Хто залишив відгук (Покупець)
+  productId String   // На який товар
+  rating    Int      // Оцінка 1-5
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([userId])
+}
+
+enum TransactionType {
+  PURCHASE          // Покупка (списання з покупця)
+  CASHBACK          // Нарахування кешбеку покупцю
+  VENDOR_EARNING    // Зарахування коштів продавцю за успішне замовлення
+  WITHDRAWAL        // Виплата грошей продавцю на його карту (Створює Продавець, підтверджує Адмін)
+  REFUND            // Повернення коштів покупцю при скасуванні
+}
+
+model Transaction {
+  id          String          @id @default(cuid())
+  userId      String          // Кому належить транзакція (User.id)
+  amount      Decimal         @db.Decimal(10, 2) // Сума транзакції
+  type        TransactionType
+  description String?         // Опис: "Виплата на карту ***1234" або "Кешбек за замовлення #12"
+  createdAt   DateTime        @default(now())
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+}
+model SystemSettings {
+  id              String   @id @default("system_core_config") // Завжди один фіксований ID
+  platformFee     Float    @default(5.0)                       // Комісія у %
+  welcomeBonus    Float    @default(150.0)                     // Бонус у ₴
+  maintenanceMode Boolean  @default(false)                     // Технічний режим
+  updatedAt       DateTime @updatedAt
+}
