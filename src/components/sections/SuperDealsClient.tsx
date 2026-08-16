@@ -2,12 +2,15 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { motion } from "framer-motion";
-import { useCartStore } from "@/store/useCartStore"; // Підключаємо наш Zustand кошик
-import { ChevronRight, ShoppingCart, Heart, Flame, Check } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useCartStore } from "@/store/useCartStore";
+import { useWishlistStore } from "@/store/useWishlistStore";
+import { useAuth } from "@/context/AuthContext"; // Твій наявний контекст
+import { toggleWishlistItem } from "@/app/favorites/actions";
+import { ChevronRight, ShoppingCart, Heart, Flame, Check, AlertCircle } from "lucide-react";
 
 interface DealItem {
-  id: string; // Строкові ID з бази даних Neon (ProductVariant ID або Product ID)
+  id: string;
   title: string;
   price: number;
   oldPrice: number;
@@ -16,6 +19,7 @@ interface DealItem {
   totalStock: number;
   img: string;
   href: string;
+  slug: string;
 }
 
 interface SuperDealsClientProps {
@@ -25,14 +29,14 @@ interface SuperDealsClientProps {
 export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps) {
   const [deals, setDeals] = useState<DealItem[]>(initialDeals);
   const [timeLeft, setTimeLeft] = useState({ hours: 8, minutes: 14, seconds: 45 });
-  
-  // Об'єкт для відстеження стану додавання окремо для кожної картки (без глобального рендеру)
   const [addedItems, setAddedItems] = useState<Record<string, boolean>>({});
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Екшен додавання товарів до глобального сховища Zustand
+  const { user } = useAuth(); // Витягуємо користувача з твого AuthContext
   const addItemToCart = useCartStore((state) => state.addItem);
+  const { items: wishlistItems, toggleItem: toggleWishlistStore } = useWishlistStore();
 
-  // 1. Зворотний відлік акції
+  // Зворотний відлік акції
   useEffect(() => {
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
@@ -46,7 +50,7 @@ export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps
     return () => clearInterval(timer);
   }, []);
 
-  // 2. Ефект «живого покупця» на платформі
+  // Ефект «живого покупця»
   useEffect(() => {
     const interval = setInterval(() => {
       setDeals((prev) =>
@@ -61,14 +65,12 @@ export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps
     return () => clearInterval(interval);
   }, []);
 
-  // Сучасний обробник покупки без alert()
   const handleBuyClick = (product: DealItem) => {
     const availableStock = product.totalStock - product.soldCount;
     if (availableStock <= 0) return;
 
-    // Записуємо товар до Zustand (зберігається в localStorage)
     addItemToCart({
-      id: product.id, // Використовуємо ID як унікальний ключ варіації лоту
+      id: product.id,
       productId: product.id,
       title: product.title,
       brand: "SuperDeals",
@@ -78,19 +80,64 @@ export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps
       attributes: { promo: "Flash Sale" }
     });
 
-    // Вмикаємо локальну анімацію успіху на конкретній кнопці
     setAddedItems((prev) => ({ ...prev, [product.id]: true }));
-    
-    // Повертаємо початковий стан кнопки через 1.5 секунди
-    setTimeout(() => {
-      setAddedItems((prev) => ({ ...prev, [product.id]: false }));
-    }, 1500);
+    setTimeout(() => setAddedItems((prev) => ({ ...prev, [product.id]: false })), 1500);
+  };
+
+  const handleHeartClick = async (product: DealItem) => {
+    // Якщо користувач не увійшов — показуємо гарний анімований тост
+    if (!user || !user.id) {
+      setErrorMessage("Будь ласка, увійдіть, щоб зберігати товари");
+      setTimeout(() => setErrorMessage(null), 3000);
+      return;
+    }
+
+    // 1. Оптимістично додаємо/видаляємо в локальному стейті для миттєвого відгуку сердечка
+    toggleWishlistStore({
+      id: product.id,
+      title: product.title,
+      price: product.price,
+      slug: product.slug || product.href.split("/").pop() || "",
+      imageUrl: product.img,
+    });
+
+    // 2. Стріляємо в Neon DB, чітко передаючи user.id з нашого AuthContext
+    const res = await toggleWishlistItem(product.id, user.id);
+
+    if (!res.success) {
+      setErrorMessage(res.error || "Помилка синхронізації");
+      setTimeout(() => setErrorMessage(null), 3000);
+
+      // Якщо база дала збій — відкочуємо сердечко назад
+      toggleWishlistStore({
+        id: product.id,
+        title: product.title,
+        price: product.price,
+        slug: product.slug || product.href.split("/").pop() || "",
+        imageUrl: product.img,
+      });
+    }
   };
 
   return (
-    <section className="mt-12 bg-white dark:bg-[#0f172a] rounded-3xl p-6 shadow-sm border border-gray-100 dark:border-slate-800/60">
-      
-      {/* ШАПКА СЕКЦІЇ */}
+    <section className="mt-12 bg-white dark:bg-[#0f172a] rounded-3xl p-6 shadow-sm border border-gray-100 dark:border-slate-800/60 relative">
+
+      {/* Тост сповіщення */}
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl text-rose-400 font-bold text-xs"
+          >
+            <AlertCircle size={16} className="text-rose-500 shrink-0" />
+            <span>{errorMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Шапка */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-rose-500/10 text-rose-500 rounded-xl">
@@ -99,31 +146,29 @@ export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps
           <h2 className="text-xl md:text-2xl font-black tracking-tight text-gray-950 dark:text-white uppercase font-mono">
             SuperDeals
           </h2>
-          
           <div className="flex items-center gap-1 font-mono text-xs font-bold text-white bg-rose-500 px-3 py-1.5 rounded-xl shadow-sm">
-            <span className="text-[10px] uppercase font-sans tracking-wider mr-1 opacity-90 hidden sm:inline">До кінця:</span>
             <span>{String(timeLeft.hours).padStart(2, '0')}</span>:
             <span>{String(timeLeft.minutes).padStart(2, '0')}</span>:
             <span className="w-4 inline-block text-center text-amber-300">{String(timeLeft.seconds).padStart(2, '0')}</span>
           </div>
         </div>
-        
         <Link href="/superdeals" className="text-sm font-bold text-indigo-600 dark:text-amber-400 hover:text-indigo-800 dark:hover:text-amber-300 flex items-center gap-1 group">
           Дивитися всі <ChevronRight size={16} className="transform group-hover:translate-x-0.5 transition-transform" />
         </Link>
       </div>
 
-      {/* СІТКА РЕАЛЬНИХ ТОВАРІВ */}
+      {/* Сітка товарів */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {deals.map((product) => {
           const fillPercentage = Math.min((product.soldCount / product.totalStock) * 100, 100);
           const isUrgent = fillPercentage > 85;
           const isUrlImage = product.img.startsWith("http") || product.img.startsWith("/");
-          const isItemAdded = !!addedItems[product.id]; // Дізнаємося поточний стан цієї картки
+          const isItemAdded = !!addedItems[product.id];
           const isOutOfStock = product.soldCount >= product.totalStock;
+          const isLiked = wishlistItems.some((i) => i.id === product.id);
 
           return (
-            <motion.div 
+            <motion.div
               key={product.id}
               whileHover={{ y: -6, scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
@@ -133,12 +178,17 @@ export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps
                 <span className="bg-rose-500 text-white text-[11px] font-black px-2.5 py-0.5 rounded-lg font-mono">
                   -{product.discount}%
                 </span>
-                <button className="w-8 h-8 rounded-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-gray-400 hover:text-rose-500 border border-gray-100 dark:border-slate-800 flex items-center justify-center cursor-pointer">
-                  <Heart size={16} />
+                <button
+                  onClick={() => handleHeartClick(product)}
+                  className={`w-8 h-8 rounded-full border flex items-center justify-center cursor-pointer backdrop-blur-md transition-all ${isLiked
+                      ? "bg-rose-500/10 text-rose-500 border-rose-500/30"
+                      : "bg-white/80 dark:bg-slate-900/80 text-gray-400 hover:text-rose-500 border-gray-100 dark:border-slate-800"
+                    }`}
+                >
+                  <Heart size={16} className={isLiked ? "fill-rose-500 text-rose-500" : ""} />
                 </button>
               </div>
 
-              {/* Зображення з Vercel Blob */}
               <Link href={product.href} className="h-36 md:h-40 bg-white dark:bg-slate-900/40 rounded-xl flex items-center justify-center mb-3 shadow-sm relative overflow-hidden p-2">
                 {isUrlImage ? (
                   <img src={product.img} alt={product.title} className="max-w-full max-h-full object-contain transition-transform duration-500 group-hover/card:scale-110" />
@@ -159,38 +209,47 @@ export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps
                   <span className="text-xs text-gray-400 dark:text-gray-500 line-through font-mono">{product.oldPrice} ₴</span>
                 </div>
 
-                {/* Динамічний прогрес-бар складу */}
+                {/* Динамічний прогрес-бар та лічильник залишку */}
                 <div className="mt-4">
                   <div className="w-full bg-gray-200 dark:bg-slate-800 h-2 rounded-full overflow-hidden relative">
-                    <div 
+                    <div
                       className={`h-full rounded-full transition-all duration-500 ${isUrgent ? "bg-gradient-to-r from-amber-500 to-rose-500" : "bg-gradient-to-r from-orange-500 to-rose-500"}`}
                       style={{ width: `${fillPercentage}%` }}
                     />
                   </div>
-                  <div className="flex items-center justify-between mt-1.5 text-[10px] font-bold">
-                    <span className={isUrgent ? "text-rose-500 animate-pulse" : "text-gray-500 dark:text-gray-400"}>{product.soldCount} продано</span>
-                    <span className="text-gray-400 dark:text-gray-500 font-medium">Залишок: {product.totalStock - product.soldCount} шт</span>
+                  <div className="flex items-center justify-between mt-1.5 text-[10px] font-bold mb-3">
+                    <span className={isUrgent ? "text-rose-500 animate-pulse" : "text-gray-500 dark:text-gray-400"}>
+                      {product.soldCount} продано
+                    </span>
+                    <span className="text-gray-400 dark:text-gray-500">
+                      з {product.totalStock}
+                    </span>
                   </div>
                 </div>
-              </div>
 
-              {/* СУЧАСНА МОДИФІКОВАНА КНОПКА ДОДАННЯ З ЛОКАЛЬНИМ ФІДБЕКОМ */}
-              <div className="mt-4">
-                <motion.button 
-                  whileTap={{ scale: 0.95 }}
+                {/* Кнопка дії — Оптимізована під кошик і типізацію Omit */}
+                <button
                   disabled={isOutOfStock}
                   onClick={() => handleBuyClick(product)}
-                  className={`w-full font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                    isOutOfStock
-                      ? "bg-gray-200 dark:bg-slate-800 text-gray-400"
+                  className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all select-none cursor-pointer ${isOutOfStock
+                      ? "bg-gray-200 dark:bg-slate-800 text-gray-400 dark:text-gray-600 cursor-not-allowed"
                       : isItemAdded
-                      ? "bg-emerald-500 text-white shadow-emerald-500/20"
-                      : "bg-indigo-600 dark:bg-slate-800 hover:bg-indigo-700 dark:hover:bg-slate-700 text-white"
-                  }`}
+                        ? "bg-emerald-500 text-white shadow-md shadow-emerald-500/10"
+                        : "bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-gray-100 text-white dark:text-slate-950 shadow-sm"
+                    }`}
                 >
-                  {isItemAdded ? <Check size={14} /> : <ShoppingCart size={14} />} 
-                  {isOutOfStock ? "Розпродано" : isItemAdded ? "Додано!" : "Купити"}
-                </motion.button>
+                  {isItemAdded ? (
+                    <>
+                      <Check size={14} />
+                      В кошику
+                    </>
+                  ) : (
+                    <>
+                      <ShoppingCart size={14} />
+                      Купити
+                    </>
+                  )}
+                </button>
               </div>
             </motion.div>
           );
@@ -199,3 +258,4 @@ export default function SuperDealsClient({ initialDeals }: SuperDealsClientProps
     </section>
   );
 }
+

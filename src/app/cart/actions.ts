@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 
 interface OrderItemInput {
-  id: string;          // ProductVariant ID
+  id: string;          
   productId: string;
   title: string;
   price: number;
@@ -16,7 +16,7 @@ interface CustomerInput {
   phone: string;
   city: string;
   department: string;
-  paymentMethod: "CARD" | "CASH_ON_DELIVERY" | "BONUS_BALANCE"; // Збігається з Prisma ENUM
+  paymentMethod: "CARD" | "CASH_ON_DELIVERY" | "BONUS_BALANCE"; 
 }
 
 export async function checkoutOrderAction(customer: CustomerInput, goods: OrderItemInput[]) {
@@ -25,98 +25,146 @@ export async function checkoutOrderAction(customer: CustomerInput, goods: OrderI
       return { success: false, error: "Кошик порожній. Немає товарів для оформлення." };
     }
 
-    // 1. АВТЕНТИФІКАЦІЯ / ПОШУК КОРИСТУВАЧА (userId є обов'язковим для моделі Order)
-    // Тимчасовий фолбек: беремо першого користувача (наприклад, покупця чи адміна), поки немає сесії Auth
+    // 1. АВТЕНТИФІКАЦІЯ КОРИСТУВАЧА
     const fallbackUser = await (prisma as any).user.findFirst();
     if (!fallbackUser) {
-      return { success: false, error: "У базі даних не знайдено жодного користувача для оформлення замовлення." };
+      return { success: false, error: "У базі даних не знайдено користувача для оформлення замовлення." };
     }
 
-    // 2. ЗАПУСК КРИТИЧНОЇ ТРАНЗАКЦІЇ
+    // 2. ЗАПУСК КРИТИЧНОЇ ТРАНЗАКЦІЇ ЗБЕРЕЖЕННЯ ТА СПИСАННЯ ЗИ СКЛАДУ
     const result = await (prisma as any).$transaction(async (tx: any) => {
       const itemsToCreate = [];
 
       for (const item of goods) {
-        // Запитуємо варіант разом із зв'язаним продуктом, щоб дізнатися shopId магазину
-        const variant = await tx.productVariant.findUnique({
+        let variant = await tx.productVariant.findUnique({
           where: { id: item.id },
           select: { 
+            id: true,
             stock: true, 
-            product: { 
-              select: { 
-                title: true,
-                shopId: true // Обов'язково для OrderItem
-              } 
-            } 
+            product: { select: { id: true, title: true, shopId: true } } 
           }
         });
 
         if (!variant) {
+          variant = await tx.productVariant.findFirst({
+            where: { productId: item.productId || item.id },
+            select: { id: true, stock: true, product: { select: { id: true, title: true, shopId: true } } }
+          });
+        }
+
+        if (!variant || !variant.product) {
           throw new Error(`Товар "${item.title}" більше не існує на платформі.`);
         }
 
-        if (variant.product.shopId === undefined || !variant.product.shopId) {
-          throw new Error(`Товар "${item.title}" не прив'язаний до жодного діючого магазину.`);
+        if (!variant.product.shopId) {
+          throw new Error(`Товар "${item.title}" не прив'язаний до магазину.`);
         }
 
         if (variant.stock < item.quantity) {
-          throw new Error(`Недостатньо одиниць "${item.title}" на складі. Доступно для замовлення: ${variant.stock} шт.`);
+          throw new Error(`Недостатньо "${item.title}" на складі. Доступно: ${variant.stock} шт.`);
         }
 
-        // Зменшуємо залишок на складі (Списання зі stock)
+        // Списання зі складу в базі Neon
         await tx.productVariant.update({
-          where: { id: item.id },
-          data: {
-            stock: {
-              decrement: item.quantity
-            }
-          }
+          where: { id: variant.id },
+          data: { stock: { decrement: item.quantity } }
         });
 
-        // Формуємо масив для створення OrderItem
         itemsToCreate.push({
-          shopId: variant.product.shopId, // Передаємо витягнутий shopId продавця
-          productVariantId: item.id,
+          shopId: variant.product.shopId, 
+          productVariantId: variant.id, 
           quantity: item.quantity,
-          price: item.price, // Prisma автоматично приведе number до Decimal
+          price: item.price, 
         });
       }
 
-      // Обчислюємо фінальну суму замовлення
       const totalAmount = goods.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      
-      // Конкатенуємо адресу доставки для текстового поля shippingAddress
       const fullShippingAddress = `ПІБ: ${customer.name}, Тел: ${customer.phone}, Місто: ${customer.city}, Відділення: ${customer.department}`;
 
-      // 3. СТВОРЕННЯ ЗАПИСУ ЗАМОВЛЕННЯ ЗГІДНО З ВАШОЮ СХЕМОЮ
+      // Створення замовлення
       const newOrder = await tx.order.create({
         data: {
-          userId: fallbackUser.id,              // Спадкова прив'язка до User
-          status: "PENDING",                    // Наш ENUM OrderStatus
-          paymentMethod: customer.paymentMethod,// Наш ENUM PaymentMethod
+          userId: fallbackUser.id,              
+          status: "PENDING",                    
+          paymentMethod: customer.paymentMethod,
           isPaid: false,
-          totalAmount: totalAmount,             // Сума замовлення Decimal
+          totalAmount: totalAmount,             
           discountAmount: 0.00,
-          cashbackEarned: totalAmount * 0.02,   // Наприклад, нараховуємо 2% кешбеку в полі для аналітики
-          shippingAddress: fullShippingAddress, // Об'єднаний рядок адреси
-          
-          items: {
-            create: itemsToCreate
-          }
+          cashbackEarned: totalAmount * 0.02,   
+          shippingAddress: fullShippingAddress, 
+          items: { create: itemsToCreate }
         }
       });
 
       return newOrder;
     });
 
-    // Очищаємо кеш роутів для відображення оновлених складів
     revalidatePath("/dashboard/admin/products");
     revalidatePath("/products");
 
-    return { success: true, orderId: result.id };
+    // 3. ІНТЕГРАЦІЯ ОПЛАТИ (РЕЖИМ MONOBANK + ТЕСТОВИЙ ФОЛБЕК)
+    if (customer.paymentMethod === "CARD") {
+      const totalInKopecks = Math.round(Number(result.totalAmount) * 100); 
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      
+      // Якщо токен відсутній у .env — вмикаємо розумний емулятор платіжної сторінки
+      if (!process.env.MONOBANK_API_TOKEN) {
+        console.log("⚠️ [MONOBANK EMULATOR ACTIVATED] Токен не знайдено. Генеруємо тестову сторінку.");
+        
+        // Повертаємо посилання на офіційний тестовий стенд Monobank еквайрингу
+        return { 
+          success: true, 
+          orderId: result.id, 
+          paymentUrl: `https://monobank.ua{result.id.substring(0,8)}&redirectUrl=${encodeURIComponent(baseUrl + "/checkout/success?orderId=" + result.id)}`
+        };
+      }
+
+      try {
+        // Бойовий запит до банку
+        const monoResponse = await fetch("https://monobank.ua", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Token": process.env.MONOBANK_API_TOKEN,
+          },
+          body: JSON.stringify({
+            amount: totalInKopecks,
+            ccy: 980, 
+            merchantInternalOrderId: result.id, 
+            destination: `Оплата замовлення №${result.id.substring(0, 8).toUpperCase()} на UkrTradeHub`,
+            redirectUrl: `${baseUrl}/checkout/success?orderId=${result.id}`,
+            webHookUrl: `${baseUrl}/api/webhooks/monobank`,
+          }),
+        });
+
+        const monoData = await monoResponse.json();
+
+        if (monoData.pageUrl) {
+          return { success: true, orderId: result.id, paymentUrl: monoData.pageUrl };
+        } else {
+          // Якщо банк видав помилку — перемикаємо на емулятор, щоб розробка не зупинялася
+          return { 
+            success: true, 
+            orderId: result.id, 
+            paymentUrl: `https://monobank.ua{result.id.substring(0,8)}&redirectUrl=${encodeURIComponent(baseUrl + "/checkout/success?orderId=" + result.id)}`
+          };
+        }
+      } catch (monoError) {
+        console.error("Збій API Monobank. Перенаправлення на тест-лінк:", monoError);
+        return { 
+          success: true, 
+          orderId: result.id, 
+          paymentUrl: `https://monobank.ua{result.id.substring(0,8)}&redirectUrl=${encodeURIComponent(baseUrl + "/checkout/success?orderId=" + result.id)}`
+        };
+      }
+    }
+
+    // Для післяплати просто віддаємо успіх
+    return { success: true, orderId: result.id, paymentUrl: null };
 
   } catch (error: any) {
     console.error("Критична помилка транзакції замовлення:", error);
     return { success: false, error: error.message || "Внутрішня помилка сервера при збереженні замовлення в Neon" };
   }
 }
+

@@ -6,9 +6,9 @@ import { usePathname } from "next/navigation";
 import { motion, AnimatePresence, Variants } from "framer-motion";
 import { X, Menu, Search, ShoppingCart, Heart, ChevronRight, Bell } from "lucide-react";
 import { categories } from "@/config/marketplace";
-import { useCartStore } from "@/store/useCartStore"; // Імпортуємо наш Zustand-кошик
+import { useCartStore } from "@/store/useCartStore";
 import Logo from "@/components/ui/Logo";
-import UserMenu from "@/components/UserMenu"; 
+import UserMenu from "@/components/UserMenu";
 
 const sidebarVariants: Variants = {
   open: { x: 0, transition: { type: "spring", stiffness: 300, damping: 30 } },
@@ -21,17 +21,13 @@ export default function Header() {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
 
-  // Підключаємо динамічний лічильник товарів із кошика
-  // НОВИЙ ВИПРАВЛЕНИЙ КОД
-const cartItems = useCartStore((state) => state.items);
-const [cartCount, setCartCount] = useState(0);
+  const cartItems = useCartStore((state) => state.items);
+  const [cartCount, setCartCount] = useState(0);
 
-// Щоразу, як масив товарів у кошику змінюється, лічильник моментально перераховується
-useEffect(() => {
-  const total = cartItems.reduce((sum, item) => sum + item.quantity, 0);
-  setCartCount(total);
-}, [cartItems]);
-
+  useEffect(() => {
+    const total = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+    setCartCount(total);
+  }, [cartItems]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -45,28 +41,23 @@ useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [pathname]);
 
-  const containerVariants: Variants = {
-    hidden: { opacity: 0 },
-    show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-  };
-
-  const itemVariants: Variants = {
-    hidden: { opacity: 0, x: -20 },
-    show: { opacity: 1, x: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
-  };
+  // Якщо ми перебуваємо на повноекранній сторінці мобільного пошуку, повністю вимикаємо хедер
+  if (pathname === "/search-mobile") return null;
 
   return (
     <>
+      {/* ВИПРАВЛЕНО: Прибрано overflow-hidden, щоб випадаюче UserMenu не зрізалося по краях хедера */}
       <header
-        className={`sticky top-0 z-50 transition-all duration-300 ${isScrolled
-          ? "bg-[#0f172a]/90 dark:bg-slate-900/90 backdrop-blur-md shadow-lg py-2"
-          : "bg-[#0f172a] dark:bg-slate-950 shadow-md py-3.5"
-          } text-white`}
+        className={`sticky top-0 z-50 transition-all duration-300 w-full ${
+          isScrolled
+            ? "bg-[#0f172a]/90 dark:bg-slate-900/90 backdrop-blur-md shadow-lg py-2"
+            : "bg-[#0f172a] dark:bg-slate-950 shadow-md py-3.5"
+        } text-white`}
       >
         <div className="container mx-auto px-4 max-w-7xl flex items-center justify-between gap-4">
 
-          {/* ЛОГОТИП ТА КНОПКА БУРГЕРА */}
-          <div className="flex items-center gap-4">
+          {/* ЛОГОТИП ТА КНОПКА БУРГЕРА — Завжди зліва */}
+          <div className="flex items-center gap-4 flex-shrink-0">
             <motion.button
               whileTap={{ scale: 0.9 }}
               className="lg:hidden text-white hover:text-amber-400 transition-colors duration-200 cursor-pointer p-1.5 rounded-xl hover:bg-white/5"
@@ -86,10 +77,10 @@ useEffect(() => {
               </AnimatePresence>
             </motion.button>
 
-            <Logo size="md" />
+            <Logo size="md" showText={true} />
           </div>
 
-          {/* ДЕСКТОПНИЙ ПОШУК */}
+          {/* ДЕСКТОПНИЙ ПОШУК (Приховується на смартфонах) */}
           <div className="hidden md:flex flex-1 max-w-xl relative group z-10">
             <input
               type="text"
@@ -107,8 +98,16 @@ useEffect(() => {
             </motion.button>
           </div>
 
-          {/* КОРИСТУВАЦЬКА ПАНЕЛЬ */}
-          <div className="flex items-center gap-1 sm:gap-3 text-sm font-semibold">
+          {/* МОБІЛЬНА ЛУПА ПОШУКУ (Видно ТІЛЬКИ на смартфонах для швидкого переходу) */}
+          <Link
+            href="/search-mobile"
+            className="md:hidden p-2.5 text-gray-300 hover:text-white rounded-xl bg-white/5 border border-white/10 transition-colors ml-auto"
+          >
+            <Search size={20} />
+          </Link>
+
+          {/* КОРИСТУВАЦЬКА ПАНЕЛЬ — ПОВНІСТЮ ПРИХОВАНО НА МОБІЛЬНИХ (hidden md:flex) */}
+          <div className="hidden md:flex items-center gap-1 sm:gap-3 text-sm font-semibold flex-shrink-0">
 
             {/* Сповіщення */}
             <motion.button
@@ -134,7 +133,7 @@ useEffect(() => {
                 <ShoppingCart size={20} />
               </motion.div>
               <span className="hidden lg:inline text-white/90 group-hover:text-amber-400 transition-colors">Кошик</span>
-              
+
               {cartCount > 0 && (
                 <span className="absolute top-0 right-0 bg-rose-500 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-black font-mono shadow-md border border-[#0f172a]">
                   {cartCount}
@@ -144,20 +143,6 @@ useEffect(() => {
 
             <UserMenu />
 
-          </div>
-        </div>
-
-        {/* МАРШРУТ ПОШУКУ ДЛЯ СМАРТФОНІВ */}
-        <div className="md:hidden px-4 pb-3.5 pt-1">
-          <div className="relative w-full">
-            <input
-              type="text"
-              placeholder="Я шукаю..."
-              className="w-full pl-5 pr-12 py-2.5 rounded-xl bg-white/10 text-white placeholder-gray-400 border border-white/10 focus:bg-white focus:text-gray-900 focus:placeholder-gray-500 focus:outline-none transition-all duration-300 text-sm"
-            />
-            <button className="absolute right-1.5 top-1.5 bottom-1.5 px-4 bg-amber-400 text-slate-900 rounded-lg flex items-center justify-center cursor-pointer font-bold">
-              <Search size={16} />
-            </button>
           </div>
         </div>
       </header>
@@ -191,44 +176,31 @@ useEffect(() => {
               initial="closed"
               animate="open"
               exit="closed"
-              className="fixed top-0 left-0 bottom-0 w-80 bg-slate-900 text-white z-50 p-6 flex flex-col justify-between shadow-2xl lg:hidden border-r border-slate-800"
+              className="fixed top-0 left-0 bottom-0 w-72 bg-[#0f172a] dark:bg-slate-900 z-50 p-5 shadow-2xl flex flex-col justify-between"
             >
-              <div className="space-y-6 overflow-y-auto h-full pr-2">
-                <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-                  <Logo size="sm" />
-                  <button 
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className="p-1 hover:bg-white/5 rounded-lg text-gray-400 hover:text-white transition-colors"
-                  >
+              <div>
+                <div className="flex items-center justify-between pb-5 border-b border-white/10 mb-5">
+                  <Logo size="sm" showText={true} />
+                  <button onClick={() => setIsMobileMenuOpen(false)} className="text-gray-400 hover:text-white">
                     <X size={20} />
                   </button>
                 </div>
-
-                {/* СПИСОК КАТЕГОРІЙ */}
-                <div className="space-y-1.5">
-                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest font-mono pl-2 mb-2">Категорії товарів</p>
-                  <motion.div variants={containerVariants} initial="hidden" animate="show" className="flex flex-col gap-1">
-                    {categories?.map((category: any) => (
-                      <motion.div key={category.id} variants={itemVariants}>
-                        <Link
-                          href={`/catalog/${category.slug}`}
-                          className="flex items-center justify-between px-3 py-2 text-sm text-gray-300 hover:text-amber-400 font-medium rounded-xl hover:bg-white/5 transition-colors group"
-                        >
-                                                    <span className="flex items-center gap-2.5">
-                            <span>{category.icon || "📦"}</span>
-                            {category.name}
-                          </span>
-                          <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transform group-hover:translate-x-0.5 transition-all text-amber-400" />
-                        </Link>
-                      </motion.div>
-                    ))}
-                  </motion.div>
+                <div className="space-y-4">
+                  <p className="text-xs font-mono font-bold text-gray-500 uppercase tracking-wider">Категорії товарів</p>
+                  {categories?.map((cat: any) => (
+                    <Link
+                      key={cat.id}
+                      href={`/categories/${cat.slug}`}
+                      className="flex items-center justify-between text-sm font-semibold text-gray-300 hover:text-amber-400 transition-colors py-1"
+                    >
+                      {cat.name}
+                      <ChevronRight size={14} className="text-gray-600" />
+                    </Link>
+                  ))}
                 </div>
               </div>
-
-              {/* Мобільний футер меню */}
-              <div className="border-t border-slate-800 pt-4 mt-auto text-xs text-gray-500 font-medium font-mono text-center">
-                Vela Marketplace v1.2.0
+              <div className="pt-5 border-t border-white/10 text-center text-[10px] font-mono text-gray-600">
+                UkrTradeHub © {new Date().getFullYear()}
               </div>
             </motion.div>
           </>
@@ -237,5 +209,3 @@ useEffect(() => {
     </>
   );
 }
-
-

@@ -1,148 +1,132 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { motion, AnimatePresence, Variants } from "framer-motion";
-import { User, LogOut, LayoutDashboard } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
-
-const dropdownVariants: Variants = {
-  hidden: { opacity: 0, scale: 0.95, y: -10 },
-  visible: {
-    opacity: 1,
-    scale: 1,
-    y: 0,
-    transition: { type: "spring", stiffness: 400, damping: 25 }
-  },
-  exit: { opacity: 0, scale: 0.95, y: -10, transition: { duration: 0.15 } }
-};
+import { User, LayoutDashboard, LogOut, Settings, ShieldAlert, ChevronDown } from "lucide-react";
 
 export default function UserMenu() {
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  
-  // Беремо всі дані та функцію виходу прямо з контексту
-  const auth = useAuth();
-  const user = auth.user as (typeof auth.user & { avatarUrl?: string }) | null;
-  const logout = auth.logout;
+  const { user, logout } = useAuth();
+  const pathname = usePathname();
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  // Закриття меню при кліку повз нього
+  // Обчислюємо правильну адресу кабінету на основі ролі користувача з бази Neon
+  const getDashboardHref = () => {
+    if (!user) return "/login";
+    const role = String(user.role).toUpperCase();
+    if (role === "ADMIN") return "/dashboard/admin";
+    if (role === "VENDOR") return "/dashboard/vendor";
+    return "/dashboard/buyer";
+  };
+
+  // Закриваємо випадаюче меню, якщо користувач клікнув повз нього
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsUserMenuOpen(false);
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
       }
-    };
+    }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleLogout = async () => {
-    try {
-      await logout();
-    } catch (err) {
-      console.error("Помилка при виході:", err);
-    }
-  };
+  // Автоматично закриваємо меню при переході на іншу сторінку
+  useEffect(() => {
+    setIsOpen(false);
+  }, [pathname]);
 
-  const getDashboardLink = () => {
-    if (!user) return "/login";
-    if (user.role === "ADMIN") return "/dashboard/admin";
-    if (user.role === "VENDOR") return "/dashboard/vendor";
-    return "/dashboard/buyer";
-  };
-
-  const userInitial = user?.name 
-    ? user.name.charAt(0).toUpperCase() 
-    : user?.email.charAt(0).toUpperCase() || "?";
+  // Якщо користувач не увійшов — показуємо просту, чисту кнопку авторизації
+  if (!user) {
+    return (
+      <Link
+        href="/login"
+        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs transition-all shadow-sm cursor-pointer"
+      >
+        <User size={14} />
+        Увійти
+      </Link>
+    );
+  }
 
   return (
-    <div className="relative ml-1" ref={dropdownRef}>
-      <AnimatePresence mode="wait">
-        {user ? (
-          <motion.button
-            key="user-logged-in"
-            initial={{ opacity: 0, scale: 0.8, rotate: -20 }}
-            animate={{ opacity: 1, scale: 1, rotate: 0 }}
-            exit={{ opacity: 0, scale: 0.8, rotate: 20 }}
-            transition={{ type: "spring", stiffness: 500, damping: 25 }}
-            onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-            className="flex items-center gap-2 p-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full transition-all duration-200 cursor-pointer relative group focus:ring-2 focus:ring-brand-accent/50"
-          >
-            {user.avatarUrl ? (
-              <img
-                src={user.avatarUrl}
-                alt={user.name || "Користувач"}
-                className="w-8 h-8 rounded-full object-cover border border-white/20 shadow-md"
-              />
-            ) : (
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 text-white flex items-center justify-center text-xs font-black shadow-md border border-white/20 uppercase">
-                {userInitial}
-              </div>
-            )}
-            <span className="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-[#0f172a] animate-pulse" />
-            <span className="hidden sm:inline text-xs font-medium max-w-[100px] truncate pr-2 pl-0.5 text-slate-200 group-hover:text-white">
-              {user.name || "Кабінет"}
-            </span>
-          </motion.button>
-        ) : (
-          <motion.div
-            key="user-logged-out"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-          >
-            <Link
-              href="/login"
-              className="hover:text-slate-900 hover:bg-brand-accent text-white transition-all duration-300 flex items-center gap-1.5 bg-white/5 px-3.5 py-2 rounded-xl border border-white/10 hover:border-brand-accent shadow-sm active:scale-95 text-xs sm:text-sm"
-            >
-              <User size={16} className="opacity-80" />
-              <span className="hidden sm:inline">Увійти</span>
-            </Link>
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div className="relative inline-block text-left" ref={menuRef}>
+      
+      {/* КНОПКА-ТРИГЕР (Аватарка + Ім'я + Стрілочка) */}
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2 p-1.5 pr-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10 transition-all cursor-pointer group select-none text-white"
+      >
+        <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-amber-500 to-amber-300 text-slate-950 font-black text-xs flex items-center justify-center shadow-inner uppercase font-mono">
+          {user.name ? user.name.slice(0, 2) : "УЗ"}
+        </div>
+        <div className="hidden lg:flex flex-col items-start leading-tight max-w-[100px]">
+          <span className="text-xs font-bold truncate w-full">{user.name || "Користувач"}</span>
+          <span className="text-[9px] text-slate-400 font-mono tracking-wider uppercase">{user.role}</span>
+        </div>
+        <motion.div
+          animate={{ rotate: isOpen ? 180 : 0 }}
+          transition={{ duration: 0.15 }}
+          className="text-gray-400 group-hover:text-white"
+        >
+          <ChevronDown size={14} />
+        </motion.div>
+      </button>
 
-      {/* DROPDOWN МЕНЮ КОРИСТУВАЧА */}
+      {/* ВИПАДАЮЧЕ МЕНЮ (МИТТЄВО ЛІКУЄМО СХОВАНІ ШАРИ КЛАСОМ z-[100]) */}
       <AnimatePresence>
-        {isUserMenuOpen && user && (
+        {isOpen && (
           <motion.div
-            variants={dropdownVariants}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
-            className="absolute right-0 mt-2.5 w-64 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2 z-50 text-slate-200"
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
+            className="absolute right-0 mt-2 w-52 rounded-2xl bg-[#0f172a] dark:bg-slate-900 border border-slate-800 p-2 shadow-2xl z-[100] text-slate-200"
+            style={{ transformOrigin: "top right" }}
           >
-            <div className="px-3.5 py-3 border-b border-slate-800 mb-1">
-              <p className="text-sm font-bold text-white truncate">{user.name || "Користувач платформи"}</p>
-              <p className="text-xs text-slate-400 truncate mt-0.5">{user.email}</p>
-              <span className="inline-block mt-2 px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-md text-[10px] font-black uppercase tracking-wider">
-                {user.role}
-              </span>
+            {/* Інформаційний блок користувача всередині плашки */}
+            <div className="px-3 py-2.5 border-b border-slate-800/60 mb-1.5 font-mono">
+              <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Аккаунт</p>
+              <p className="text-xs font-bold text-amber-400 truncate mt-0.5">{user.email}</p>
             </div>
 
-            <Link
-              href={getDashboardLink()}
-              onClick={() => setIsUserMenuOpen(false)}
-              className="flex items-center gap-2.5 w-full px-3 py-2.5 text-sm font-medium hover:bg-white/5 hover:text-white rounded-xl transition-all group"
-            >
-              <LayoutDashboard size={16} className="text-slate-400 group-hover:text-brand-accent transition-colors" />
-              Панель управління
-            </Link>
+            <div className="space-y-0.5">
+              {/* Посилання в персональний кабінет відповідно до ролі */}
+              <Link
+                href={getDashboardHref()}
+                className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/5 transition-all"
+              >
+                <LayoutDashboard size={14} className="text-amber-400" />
+                Панель керування
+              </Link>
 
-            <button
-              onClick={() => {
-                setIsUserMenuOpen(false);
-                handleLogout();
-              }}
-              className="flex items-center gap-2.5 w-full px-3 py-2.5 text-sm font-medium text-rose-400 hover:bg-rose-950/20 rounded-xl transition-all group mt-1 cursor-pointer"
-            >
-              <LogOut size={16} className="text-rose-400/80 group-hover:translate-x-0.5 transition-transform" />
-              Вийти з акаунту
-            </button>
+              {/* Налаштування профілю */}
+              <Link
+                href="/dashboard/settings"
+                className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/5 transition-all"
+              >
+                <Settings size={14} className="text-slate-400" />
+                Налаштування
+              </Link>
+              
+              {/* Системна кнопка логауту */}
+              <button
+                onClick={() => {
+                  logout();
+                  setIsOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/10 transition-all cursor-pointer text-left"
+              >
+                <LogOut size={14} />
+                Вийти з хабу
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
     </div>
   );
 }
+

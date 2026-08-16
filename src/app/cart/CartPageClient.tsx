@@ -4,20 +4,20 @@ import React, { useState, useEffect, useTransition } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useCartStore } from "@/store/useCartStore";
-import { checkoutOrderAction } from "./actions"; // Наш адаптований під Prisma Server Action
-import { Trash2, Plus, Minus, ShoppingBag, ArrowRight, Truck, CreditCard, ShieldCheck, Loader2 } from "lucide-react";
+import { checkoutOrderAction } from "./actions";
+import { Trash2, Plus, Minus, ShoppingBag, CreditCard, Loader2 } from "lucide-react";
 
 export default function CartPageClient() {
   const { items, updateQuantity, removeItem, getTotalPrice, clearCart } = useCartStore();
   const [isMounted, setIsMounted] = useState(false);
-  const [isPending, startTransition] = useTransition(); // Індикатор завантаження для Server Action
+  const [isPending, startTransition] = useTransition();
 
-  // Вирішення проблеми гідратації Zustand persist
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
+  // 🔥 Сучасний стейт для повідомлень в інтерфейсі замість застарілих алертів
+  const [formStatus, setFormStatus] = useState<{
+    type: "success" | "error" | null;
+    message: string;
+  }>({ type: null, message: "" });
 
-  // Стейт форми, адаптований під ENUM PaymentMethod вашої Prisma-схеми
   const [formData, setFormData] = useState({
     name: "",
     phone: "",
@@ -26,27 +26,37 @@ export default function CartPageClient() {
     paymentMethod: "CARD" as "CARD" | "CASH_ON_DELIVERY" | "BONUS_BALANCE",
   });
 
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   if (!isMounted) {
-    return <div className="h-96 flex items-center justify-center text-sm font-medium text-gray-400">Завантаження кошика...</div>;
+    return (
+      <div className="h-96 flex items-center justify-center text-sm font-mono text-slate-500 bg-[#070a13]">
+        <Loader2 className="animate-spin text-amber-400 mr-2" size={16} />
+        Завантаження кошика...
+      </div>
+    );
   }
 
-  // Стан порожнього кошика
   if (items.length === 0) {
     return (
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="text-center py-16 bg-white dark:bg-[#0f172a] rounded-3xl border border-gray-100 dark:border-slate-800/60 p-8 shadow-sm flex flex-col items-center max-w-xl mx-auto"
-      >
-        <div className="p-4 bg-slate-100 dark:bg-slate-900 text-slate-400 dark:text-slate-500 rounded-2xl mb-4">
-          <ShoppingBag size={40} />
-        </div>
-        <h2 className="text-xl font-bold mb-2 text-gray-900 dark:text-white">Ваш кошик порожній</h2>
-        <p className="text-sm text-gray-500 dark:text-slate-400 mb-6">Здається, ви ще не додали жодного товару до кошика.</p>
-        <Link href="/" className="bg-indigo-600 dark:bg-amber-400 text-white dark:text-slate-950 font-bold py-2.5 px-6 rounded-xl text-xs uppercase tracking-wider shadow-md hover:opacity-90 transition-opacity">
-          Перейти до покупок
-        </Link>
-      </motion.div>
+      <div className="min-h-screen bg-[#070a13] pt-12">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center py-16 bg-[#111827]/40 border border-slate-800/60 rounded-3xl p-8 max-w-xl mx-auto flex flex-col items-center"
+        >
+          <div className="p-4 bg-slate-950 text-slate-600 border border-slate-900 rounded-2xl mb-4">
+            <ShoppingBag size={40} />
+          </div>
+          <h2 className="text-xl font-black mb-2 text-white uppercase tracking-tight font-sans">Кошик порожній</h2>
+          <p className="text-xs text-slate-400 font-mono mb-6">Ви ще не додали жодного товару до кошика.</p>
+          <Link href="/" className="bg-amber-400 text-slate-950 font-mono font-black py-2.5 px-6 rounded-xl text-xs uppercase tracking-wider hover:bg-amber-300 active:scale-[0.98] transition-all">
+            Перейти до покупок
+          </Link>
+        </motion.div>
+      </div>
     );
   }
 
@@ -54,220 +64,231 @@ export default function CartPageClient() {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  // ФУНКЦІЯ ВІДПРАВКИ ЗАМОВЛЕННЯ НА БЕКЕНД В NEON
   const handleSubmitOrder = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormStatus({ type: null, message: "" });
+
     if (!formData.name || !formData.phone || !formData.city || !formData.department) {
-      alert("Будь ласка, заповніть всі обов'язкові поля доставки.");
+      setFormStatus({ type: "error", message: "Будь ласка, заповніть всі обов'язкові поля доставки." });
       return;
     }
 
-    // Викликаємо транзакційний Server Action через Transition блок
+    const customerPayload = {
+      name: String(formData.name).trim(),
+      phone: String(formData.phone).trim(),
+      city: String(formData.city).trim(),
+      department: String(formData.department).trim(),
+      paymentMethod: formData.paymentMethod,
+    };
+
+    const goodsPayload = items.map((item) => ({
+      id: String(item.id),
+      productId: String(item.productId),
+      title: String(item.title || "Товар"),
+      price: Number(item.price) || 0,
+      quantity: Number(item.quantity) || 1,
+    }));
+
     startTransition(async () => {
-      const response = await checkoutOrderAction(formData, items);
+      const response = await checkoutOrderAction(customerPayload, goodsPayload);
 
       if (response.success) {
-        alert(`Дякуємо, ${formData.name}! Замовлення №${response.orderId?.substring(0, 8).toUpperCase()} успішно зареєстровано в системі Vela.`);
-        clearCart(); // Повністю чистимо клієнтський стейт та localStorage
+        // 🔥 НАЙВАЖЛИВІШЕ: Якщо сервер повернув платіжне посилання від Monobank
+        if (response.paymentUrl) {
+          setFormStatus({
+            type: "success",
+            message: "Замовлення сформовано! Перенаправлення на безпечну оплату Monobank..."
+          });
+
+          // Чистимо кошик та миттєво перенаправляємо на платіжну сторінку еквайрингу
+          clearCart();
+          window.location.href = response.paymentUrl;
+          return;
+        }
+
+        // Логіка для звичайної післяплати (CASH_ON_DELIVERY) або бонусів
+        setFormStatus({
+          type: "success",
+          message: `Дякуємо! Замовлення №${response.orderId?.substring(0, 8).toUpperCase()} успішно зареєстровано.`
+        });
+
+        setTimeout(() => {
+          clearCart();
+          // Перенаправляємо на сторінку успіху нашого сайту
+          window.location.href = `/checkout/success?orderId=${response.orderId}`;
+        }, 2000);
+
       } else {
-        // Виведення помилки від транзакції бази (наприклад, якщо розкупили товар, поки заповнювали форму)
-        alert(`Помилка оформлення: ${response.error}`);
+        setFormStatus({
+          type: "error",
+          message: `Помилка оформлення: ${response.error}`
+        });
       }
     });
   };
 
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+    <main className="container mx-auto px-4 py-8 max-w-7xl min-h-screen bg-[#070a13] text-slate-200">
+      <h1 className="text-2xl md:text-3xl font-black text-white uppercase tracking-tight mb-8 border-b border-slate-900 pb-4">
+        Оформлення замовлення
+      </h1>
 
-      {/* ЛІВА ЧАСТИНА: СПИСОК ТОВАРІВ (7 КОЛОНОК) */}
-      <div className="lg:col-span-7 space-y-4">
-        <div className="bg-white dark:bg-[#0f172a] rounded-3xl p-4 md:p-6 border border-gray-100 dark:border-slate-800/60 shadow-sm">
-          <h2 className="text-sm font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest font-mono mb-4">Ваші товари</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-          <div className="divide-y divide-gray-100 dark:divide-slate-800/60">
-            <AnimatePresence>
-              {items.map((item) => (
-                <motion.div
-                  key={item.id}
-                  exit={{ opacity: 0, x: -20 }}
-                  className="py-4 flex gap-4 items-center justify-between first:pt-0 last:pb-0"
-                >
-                  {/* Зображення варіації */}
-                  <div className="w-16 h-16 bg-gray-50 dark:bg-slate-950 rounded-xl border border-gray-100 dark:border-slate-900 shrink-0 p-1 flex items-center justify-center overflow-hidden">
+        {/* ЛІВА ЧАСТИНА: СПИСОК ТОВАРІВ */}
+        <div className="lg:col-span-7 space-y-4">
+          <h2 className="text-xs font-black tracking-wider text-slate-400 uppercase font-mono mb-2">Ваші товари</h2>
+          <div className="space-y-3">
+            {items.map((item) => (
+              <div key={item.id} className="bg-[#111827]/40 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 bg-slate-950 rounded-xl border border-slate-900 p-1 flex items-center justify-center overflow-hidden shrink-0">
                     {item.image ? (
-                      <img src={item.image} alt={item.title} className="max-w-full max-h-full object-contain" />
+                      <img src={item.image} alt={item.title} className="w-full h-full object-contain" />
                     ) : (
-                      <span className="text-2xl">🛒</span>
+                      <span className="text-xl">📦</span>
                     )}
                   </div>
-
-                  {/* Опис та назва лоту */}
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-xs md:text-sm font-bold text-gray-800 dark:text-gray-200 truncate group-hover:text-indigo-600">
-                      {item.title}
-                    </h3>
-                    <p className="text-[10px] text-gray-400 dark:text-slate-500 font-medium">Бренд: {item.brand}</p>
-                    {item.attributes?.color && (
-                      <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 bg-slate-100 dark:bg-slate-900 rounded font-bold text-slate-500">
-                        {item.attributes.color}
-                      </span>
-                    )}
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-200 line-clamp-2 max-w-xs md:max-w-md">{item.title}</h3>
+                    <p className="text-[11px] font-mono text-amber-400 font-black mt-1">{item.price} ₴</p>
                   </div>
+                </div>
 
-                  {/* Зміна кількості */}
-                  <div className="flex items-center gap-2 border border-gray-200 dark:border-slate-800 rounded-xl p-1 bg-white dark:bg-slate-950">
+                <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center bg-slate-950 border border-slate-900 rounded-xl overflow-hidden">
                     <button
-                      type="button" disabled={isPending}
-                      onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-slate-900 rounded-lg text-gray-500 transition-colors disabled:opacity-30"
+                      onClick={() => updateQuantity(item.id, Math.max(1, item.quantity - 1))}
+                      className="p-2 text-slate-400 hover:text-white transition-colors"
                     >
-                      <Minus size={14} />
+                      <Minus size={12} />
                     </button>
-                    <span className="text-xs font-mono font-bold w-6 text-center text-gray-800 dark:text-gray-200">{item.quantity}</span>
+                    <span className="px-2 text-xs font-mono font-bold text-white min-w-[20px] text-center">{item.quantity}</span>
                     <button
-                      type="button" disabled={isPending}
                       onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-slate-900 rounded-lg text-gray-500 transition-colors disabled:opacity-30"
+                      className="p-2 text-slate-400 hover:text-white transition-colors"
                     >
-                      <Plus size={14} />
+                      <Plus size={12} />
                     </button>
                   </div>
-
-                  {/* Фінальна вартість */}
-                  <div className="text-right min-w-[70px]">
-                    <p className="text-sm md:text-base font-black text-gray-900 dark:text-white font-mono">
-                      {(item.price * item.quantity).toLocaleString("uk-UA")} ₴
-                    </p>
-                    <p className="text-[10px] text-gray-400 dark:text-slate-500 font-mono">{item.price} ₴ / шт</p>
-                  </div>
-
-                  {/* Кнопка видалення */}
                   <button
-                    type="button" disabled={isPending}
                     onClick={() => removeItem(item.id)}
-                    className="p-2 text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 rounded-xl transition-colors disabled:opacity-30 cursor-pointer"
-                    aria-label="Видалити"
+                    className="p-2 bg-slate-950 border border-slate-900 rounded-xl text-rose-400 hover:text-rose-300 transition-colors"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={13} />
                   </button>
-                </motion.div>
-              ))}
-            </AnimatePresence>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-      </div>
 
-      {/* ПРАВА ЧАСТИНА: АНКЕТА ДОСТАВКИ ТА ЧЕК (5 КОЛОНОК) */}
-      <form onSubmit={handleSubmitOrder} className="lg:col-span-5 space-y-6">
+        {/* ПРАВА ЧАСТИНА: UI ФОРМА ДОСТАВКИ */}
+        <div className="lg:col-span-5 bg-[#111827]/40 border border-slate-800/80 rounded-3xl p-6 space-y-6">
+          <div>
+            <h2 className="text-sm font-black text-white uppercase tracking-tight">Дані доставки</h2>
+            <p className="text-[10px] text-slate-500 font-mono mt-0.5">Всі поля є обов'язковими для Neon транзакції</p>
+          </div>
 
-        {/* АНКЕТА КЛІЄНТА */}
-        <div className="bg-white dark:bg-[#0f172a] rounded-3xl p-4 md:p-6 border border-gray-100 dark:border-slate-800/60 shadow-sm space-y-4">
-          <h2 className="text-sm font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest font-mono">Дані доставки (Нова Пошта)</h2>
-
-          <div className="space-y-3">
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Прізвище та Ім'я отримувача</label>
+          <form onSubmit={handleSubmitOrder} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-black uppercase text-slate-500 font-mono">ПІБ Отримувача</label>
               <input
-                type="text" required name="name" disabled={isPending} value={formData.name} onChange={handleInputChange}
-                placeholder="Іванов Іван"
-                className="w-full bg-gray-50 dark:bg-slate-950 border border-gray-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:border-indigo-500 dark:focus:border-amber-400 text-gray-900 dark:text-white transition-colors disabled:opacity-50"
+                type="text" name="name" required value={formData.name} onChange={handleInputChange} placeholder="Іван Іванов"
+                className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-700 focus:outline-none focus:border-amber-400"
               />
             </div>
 
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Контактний номер телефону</label>
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-black uppercase text-slate-500 font-mono">Телефон</label>
               <input
-                type="tel" required name="phone" disabled={isPending} value={formData.phone} onChange={handleInputChange}
-                placeholder="+380 99 123 45 67"
-                className="w-full bg-gray-50 dark:bg-slate-950 border border-gray-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:border-indigo-500 dark:focus:border-amber-400 text-gray-900 dark:text-white transition-colors disabled:opacity-50"
+                type="tel" name="phone" required value={formData.phone} onChange={handleInputChange} placeholder="+380991234567"
+                className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white placeholder-slate-700 focus:outline-none focus:border-amber-400"
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Місто доставки</label>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-black uppercase text-slate-500 font-mono">Місто</label>
                 <input
-                  type="text" required name="city" disabled={isPending} value={formData.city} onChange={handleInputChange}
-                  placeholder="Київ"
-                  className="w-full bg-gray-50 dark:bg-slate-950 border border-gray-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:border-indigo-500 dark:focus:border-amber-400 text-gray-900 dark:text-white transition-colors disabled:opacity-50"
+                  type="text" name="city" required value={formData.city} onChange={handleInputChange} placeholder="Снятин"
+                  className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-700 focus:outline-none focus:border-amber-400"
                 />
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">№ Відділення / Поштомат</label>
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-black uppercase text-slate-500 font-mono">Відділення НП</label>
                 <input
-                  type="text" required name="department" disabled={isPending} value={formData.department} onChange={handleInputChange}
-                  placeholder="Відділення №1"
-                  className="w-full bg-gray-50 dark:bg-slate-950 border border-gray-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:border-indigo-500 dark:focus:border-amber-400 text-gray-900 dark:text-white transition-colors disabled:opacity-50"
+                  type="text" name="department" required value={formData.department} onChange={handleInputChange} placeholder="№2"
+                  className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-700 focus:outline-none focus:border-amber-400"
                 />
               </div>
             </div>
 
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Спосіб оплати</label>
+            {/* СПОСІБ ОПЛАТИ */}
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-black uppercase text-slate-500 font-mono">
+                Спосіб оплати
+              </label>
               <select
-                name="paymentMethod" disabled={isPending} value={formData.paymentMethod}
-                onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value as any })}
-                className="w-full bg-gray-50 dark:bg-slate-950 border border-gray-200 dark:border-slate-800 rounded-xl px-3 py-2.5 text-xs font-bold text-gray-800 dark:text-slate-300 focus:outline-none disabled:opacity-50 cursor-pointer"
+                name="paymentMethod"
+                value={formData.paymentMethod}
+                onChange={handleInputChange}
+                className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-slate-300 focus:outline-none focus:border-amber-400 cursor-pointer"
               >
-                <option value="CARD">Оплата карткою на сайті (Visa/Mastercard)</option>
-                <option value="CASH_ON_DELIVERY">Накладений платіж (При отриманні)</option>
-                <option value="BONUS_BALANCE">Оплата з бонусного балансу</option>
+                <option value="CARD">Онлайн-карта (CARD)</option>
+                <option value="CASH_ON_DELIVERY">Післяплата (CASH_ON_DELIVERY)</option>
+                <option value="BONUS_BALANCE">Бонусний рахунок (BONUS_BALANCE)</option>
               </select>
             </div>
-          </div>
+
+            {/* РАЗОМ */}
+            <div className="pt-4 border-t border-slate-900 flex justify-between items-center text-xs font-mono">
+              <span className="text-slate-500 font-bold">Загальна сума:</span>
+              <span className="text-base font-black text-amber-400">{getTotalPrice()} ₴</span>
+            </div>
+
+            {/* ПЛАВНА UI НОТИФІКАЦІЯ ЗАМІСТЬ АЛЕРТІВ */}
+            <AnimatePresence mode="wait">
+              {formStatus.type && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  className={`p-3.5 rounded-xl text-xs font-mono font-bold border ${formStatus.type === "success"
+                      ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                      : "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                    }`}
+                >
+                  {formStatus.type === "success" ? "✓ " : "⚠️ "}
+                  {formStatus.message}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* КНОПКА З ЛОАДЕРОМ */}
+            <button
+              type="submit"
+              disabled={isPending}
+              className="w-full py-3 bg-amber-400 hover:bg-amber-300 disabled:bg-slate-900 disabled:text-slate-600 disabled:border-slate-800 text-slate-950 font-mono font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer select-none active:scale-[0.99]"
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="animate-spin" size={14} />
+                  <span>Обробка бази Neon...</span>
+                </>
+              ) : (
+                <>
+                  <CreditCard size={14} />
+                  <span>Підтвердити замовлення</span>
+                </>
+              )}
+            </button>
+          </form>
         </div>
 
-        {/* БЛОК ЧЕКУ ТА ПІДБИТТЯ ПІДСУМКІВ */}
-        <div className="bg-white dark:bg-[#0f172a] rounded-3xl p-4 md:p-6 border border-gray-100 dark:border-slate-800/60 shadow-sm space-y-4">
-          <h2 className="text-sm font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest font-mono">Підсумок замовлення</h2>
-
-          <div className="space-y-2 text-xs font-medium text-gray-600 dark:text-slate-400 font-mono">
-            <div className="flex justify-between">
-              <span>Сума товарів:</span>
-              <span className="text-gray-900 dark:text-white">{getTotalPrice().toLocaleString("uk-UA")} ₴</span>
-            </div>
-            <div className="flex justify-between items-center text-[11px] text-gray-400">
-              <span className="flex items-center gap-1"><Truck size={12} /> Доставка (Нова Пошта):</span>
-              <span>За тарифами перевізника</span>
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-gray-100 dark:border-slate-800/40 flex justify-between items-baseline">
-            <span className="text-sm font-bold text-gray-900 dark:text-white">До сплати:</span>
-            <span className="text-xl md:text-2xl font-black text-indigo-600 dark:text-amber-400 font-mono">
-              {getTotalPrice().toLocaleString("uk-UA")} ₴
-            </span>
-          </div>
-
-          {/* КНОПКА КУПИТИ З ЛОАДЕРОМ */}
-          <motion.button
-            whileTap={{ scale: 0.98 }}
-            type="submit"
-            disabled={isPending}
-            className="w-full bg-indigo-600 dark:bg-gradient-to-r dark:from-amber-400 dark:to-amber-500 text-white dark:text-slate-950 font-black py-3 px-6 rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-md hover:opacity-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer mt-2"
-          >
-            {isPending ? (
-              <>
-                <Loader2 size={14} className="animate-spin" />
-                Оформлення...
-              </>
-            ) : (
-              <>
-                Підтвердити замовлення
-                <ArrowRight size={14} />
-              </>
-            )}
-          </motion.button>
-
-          {/* Інформери безпеки */}
-          <div className="grid grid-cols-2 gap-2 pt-2 text-[10px] text-gray-400 font-medium">
-            <div className="flex items-center gap-1.5"><ShieldCheck size={12} className="text-emerald-500" /> Безпечна транзакція</div>
-            <div className="flex items-center gap-1.5"><CreditCard size={12} className="text-indigo-400" /> Шифрування SSL</div>
-          </div>
-        </div>
-
-      </form>
-    </div>
+      </div>
+    </main>
   );
 }
 
